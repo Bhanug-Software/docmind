@@ -1,0 +1,35 @@
+# Virtual environment
+.venv/
+
+# Environment variables (secrets)
+.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# uv
+.uv/
+
+# Data (large files, not for git)
+data/uploads/
+data/processed/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Build
+dist/
+build/
+*.egg-info/
