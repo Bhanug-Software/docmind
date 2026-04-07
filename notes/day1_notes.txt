@@ -1,0 +1,371 @@
+============================================================
+DOCMIND — DAY 1 REVISION NOTES
+Date: 2026-04-07
+Topic: Project Setup — uv, Pydantic Settings, Loguru Logging, Folder Structure
+============================================================
+
+--------------------------------------------------------------
+1. WHAT WE BUILT TODAY
+--------------------------------------------------------------
+
+Today was about building the FOUNDATION of the project. No AI yet —
+but we wired in the infrastructure that every future day builds on top of.
+
+By end of Day 1 we have:
+- A professional Python project structure
+- A virtual environment managed by uv
+- A settings system (Pydantic Settings) that reads API keys from .env
+- A logging system (Loguru) that records everything the app does
+- The project live on GitHub at github.com/Bhanug-Software/docmind
+
+--------------------------------------------------------------
+2. TOOLS USED AND WHY
+--------------------------------------------------------------
+
+uv
+- What: A modern Python package manager written in Rust
+- Why: 10-100x faster than pip. Produces a uv.lock file that guarantees
+  every machine gets identical package versions. Used by senior engineers in 2025/2026.
+- Replaces: pip + venv + pip-tools
+
+Pydantic Settings
+- What: A library that reads .env files and validates settings
+- Why: One central place for all configuration. Crashes immediately if a
+  required key is missing. No scattered os.getenv() calls across files.
+
+Loguru
+- What: A modern Python logging library
+- Why: Structured logs with timestamps, severity levels, colours, and file output.
+  Essential for debugging production apps. Replaces print() statements.
+
+--------------------------------------------------------------
+3. PROJECT STRUCTURE — EVERY FOLDER EXPLAINED
+--------------------------------------------------------------
+
+docmind/
+├── src/
+│   └── docmind/
+│       ├── api/          ← FastAPI routes (built in later days)
+│       ├── agents/       ← LangGraph multi-agent AI logic (built in later days)
+│       ├── ingestion/    ← Docling document parsing (built in later days)
+│       ├── retrieval/    ← Qdrant vector search (built in later days)
+│       ├── config/       ← Settings and environment config (built today)
+│       └── utils/        ← Shared helpers like logging (built today)
+├── tests/                ← pytest automated tests (built in later days)
+├── data/
+│   ├── uploads/          ← Raw uploaded documents
+│   └── processed/        ← Parsed and chunked output
+├── logs/                 ← Log files written by Loguru
+├── .env                  ← Real API keys (NEVER pushed to GitHub)
+├── .env.example          ← Template showing what keys are needed (pushed to GitHub)
+├── .gitignore            ← Tells Git which files to ignore
+└── README.md             ← Project description shown on GitHub
+
+WHY THIS STRUCTURE:
+Each folder has ONE job. This is called separation of concerns.
+When a bug happens in document parsing, you look in ingestion/.
+When a bug happens in search, you look in retrieval/.
+Any engineer can navigate the project without asking questions.
+
+--------------------------------------------------------------
+4. WHY __init__.py IN EVERY FOLDER
+--------------------------------------------------------------
+
+Python does not automatically treat folders as importable packages.
+When you add __init__.py to a folder, you tell Python:
+"This folder is a Python package — you can import from it."
+
+Without __init__.py:
+  from src.docmind.config.settings import settings  → ERROR
+
+With __init__.py (even empty):
+  from src.docmind.config.settings import settings  → WORKS
+
+The file can be completely empty. Its presence is what matters.
+It is a registration signal to Python.
+
+--------------------------------------------------------------
+5. VIRTUAL ENVIRONMENT — WHAT IT IS AND WHY
+--------------------------------------------------------------
+
+A virtual environment (.venv) is an isolated bubble for your project.
+Libraries installed inside it do not affect any other project on your computer.
+
+Commands:
+  uv venv --python 3.11     ← creates the bubble
+  source .venv/Scripts/activate  ← step into the bubble (Windows)
+  source .venv/bin/activate      ← step into the bubble (Mac/Linux)
+
+After activation, your terminal shows (.venv) at the start.
+This means Python and all pip/uv commands now use the bubble.
+
+IMPORTANT: Every time you open a new terminal, you must activate again.
+
+--------------------------------------------------------------
+6. .env AND .env.example — THE DIFFERENCE
+--------------------------------------------------------------
+
+.env
+- Contains your REAL secret API keys
+- Listed in .gitignore so it is NEVER pushed to GitHub
+- Only exists on your local machine
+- Example content:
+    ANTHROPIC_API_KEY=sk-ant-abc123...
+    OPENAI_API_KEY=sk-abc123...
+
+.env.example
+- Contains FAKE placeholder values
+- IS pushed to GitHub
+- Tells other developers what keys they need to set up the project
+- Example content:
+    ANTHROPIC_API_KEY=your_anthropic_key_here
+    OPENAI_API_KEY=your_openai_key_here
+
+RULE: Real keys go in .env only. Never in .env.example. Never hardcoded in code.
+
+--------------------------------------------------------------
+7. settings.py — LINE BY LINE
+--------------------------------------------------------------
+
+FILE LOCATION: src/docmind/config/settings.py
+
+WHY THIS FILE EXISTS:
+Instead of calling os.getenv("ANTHROPIC_API_KEY") scattered across
+hundreds of files, you have one central validated settings object.
+If a required key is missing, the app crashes immediately at startup
+with a clear error — not silently during a user request.
+
+CODE:
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
+
+  → Import the tools we need.
+  → BaseSettings knows how to read .env files automatically.
+  → SettingsConfigDict lets us configure behaviour.
+  → Field lets us define rules for each setting.
+
+class Settings(BaseSettings):
+
+  → Create a class called Settings.
+  → It inherits from BaseSettings which gives it .env reading superpower.
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+    )
+
+  → env_file=".env"         : look for a file called .env in the project root
+  → env_file_encoding       : the file uses standard UTF-8 text encoding
+  → case_sensitive=False    : ANTHROPIC_API_KEY and anthropic_api_key are the same
+
+    anthropic_api_key: str = Field(..., description="Anthropic API key")
+    openai_api_key: str = Field(..., description="OpenAI API key")
+
+  → These are REQUIRED settings.
+  → The ... means required — if missing from .env, app crashes immediately.
+  → : str means the value must be text.
+
+    qdrant_url: str = Field(default="http://localhost:6333")
+    qdrant_api_key: str = Field(default="")
+    langsmith_api_key: str = Field(default="")
+    langsmith_project: str = Field(default="docmind")
+    app_env: str = Field(default="development")
+    log_level: str = Field(default="DEBUG")
+
+  → These are OPTIONAL settings with default values.
+  → If missing from .env, the default is used automatically.
+
+settings = Settings()
+
+  → THE MOST IMPORTANT LINE.
+  → Creates one single instance of Settings.
+  → At this moment: Pydantic opens .env, reads every key,
+    validates them, and stores everything in this object.
+  → Any file in the project imports this one object:
+      from src.docmind.config.settings import settings
+      settings.anthropic_api_key  ← your real key, always available
+
+--------------------------------------------------------------
+8. logger.py — LINE BY LINE
+--------------------------------------------------------------
+
+FILE LOCATION: src/docmind/utils/logger.py
+
+WHY THIS FILE EXISTS:
+Logging is how your app talks to you while it runs.
+Without logs you cannot see what is happening inside the app.
+When something breaks in production, logs tell you exactly what
+happened, at what time, and at which step.
+
+WHY NOT print():
+- print() has no timestamp, no severity, no file info
+- print() cannot write to files
+- print() cannot be turned off in production
+- Loguru does all of this and more
+
+LOG LEVELS (from least to most severe):
+  DEBUG    → very detailed, development only. "Function called with x=5"
+  INFO     → normal events. "Document uploaded successfully"
+  WARNING  → unexpected but not broken. "Retrying connection..."
+  ERROR    → something failed. "Could not connect to Qdrant"
+  CRITICAL → app about to crash
+
+CODE:
+
+import sys
+from loguru import logger
+from src.docmind.config.settings import settings
+
+  → sys gives access to sys.stdout (the terminal)
+  → Import loguru's logger object
+  → Import settings so we can read log_level from .env
+
+def setup_logger():
+
+  → A function that configures the logger and returns it
+
+    logger.remove()
+
+  → Loguru comes with a default configuration. Remove it.
+  → We are replacing it with our own custom setup.
+
+    logger.add(
+        sys.stdout,
+        level=settings.log_level,
+        format="<green>{time}</green> | <level>{level}</level> | <cyan>{name}</cyan> - <white>{message}</white>",
+        colorize=True,
+    )
+
+  → Add terminal output.
+  → sys.stdout = your terminal screen
+  → level=settings.log_level = reads LOG_LEVEL from .env (DEBUG in development)
+  → format = how each line looks. {time}, {level}, {name}, {message} are placeholders
+  → colorize=True = different colours for different levels
+
+    logger.add(
+        "logs/docmind.log",
+        level="INFO",
+        format="{time} | {level} | {name} - {message}",
+        rotation="10 MB",
+        retention="7 days",
+    )
+
+  → Add file output simultaneously.
+  → Writes to logs/docmind.log
+  → level="INFO" = only write INFO and above to file (DEBUG is too noisy)
+  → rotation="10 MB" = start a new file when this one hits 10MB
+  → retention="7 days" = delete files older than 7 days automatically
+
+    return logger
+
+logger = setup_logger()
+
+  → Call the function, store the configured logger.
+  → Any file can now do:
+      from src.docmind.utils.logger import logger
+      logger.info("Document uploaded")
+      logger.error("Connection failed")
+
+WHY WRITTEN ON DAY 1:
+Logging is infrastructure — like electricity in a building.
+You wire it in first so every room can use it.
+Every module built from Day 2 onwards imports and uses the logger.
+
+--------------------------------------------------------------
+9. HOW THE FULL APP WORKS — THEORY
+--------------------------------------------------------------
+
+STEP 1: User uploads a PDF through the Chainlit UI
+STEP 2: Docling parses the PDF — extracts text, tables, figures
+STEP 3: OpenAI Embeddings converts text chunks into vectors (lists of numbers representing meaning)
+STEP 4: Vectors are stored in Qdrant (vector database)
+STEP 5: User asks a question in the chat
+STEP 6: Question is converted to a vector using OpenAI Embeddings
+STEP 7: Qdrant finds the most similar vectors (most relevant chunks)
+STEP 8: Claude receives the question + relevant chunks and generates an answer
+STEP 9: Answer streams back to the user word by word in Chainlit
+
+EVERY TOOL AND ITS JOB:
+  .env + Pydantic Settings → safely stores and validates all API keys
+  Loguru                   → records what is happening at every step
+  Docling                  → understands complex PDFs — tables, figures, text
+  OpenAI Embeddings        → converts text into numbers that represent meaning
+  Qdrant                   → fast search through millions of vectors
+  LangGraph                → orchestrates multiple AI agents working together
+  Claude API               → the brain — reads context and generates answers
+  Chainlit                 → the face — the chat UI the user sees
+  FastAPI                  → the backbone — connects UI to all backend logic
+  Docker                   → packages everything so it runs anywhere
+
+--------------------------------------------------------------
+10. GIT COMMANDS USED TODAY
+--------------------------------------------------------------
+
+git init
+  → Turns a normal folder into a Git repository
+  → Creates a hidden .git folder that tracks all changes
+  → "Start recording the history of this project"
+
+git remote add origin https://github.com/Bhanug-Software/docmind.git
+  → Links your local project to the GitHub repo online
+  → origin is the standard nickname for the remote GitHub location
+
+git add .
+  → Stages all files — selects them to be included in the next commit
+  → The . means "everything in the current folder"
+  → "Pack all files into a box ready to ship"
+
+git status
+  → Shows which files are staged, which are not tracked
+  → Used to verify .env is NOT in the list (it should be ignored)
+
+git commit -m "message"
+  → Seals the staged files and saves them as a permanent snapshot
+  → -m lets you add a label describing what you did
+  → Every commit is stored forever — you can always go back
+
+git branch -M main
+  → Renames the branch to main (GitHub's modern standard)
+
+git push -u origin main
+  → Uploads your local commits to GitHub
+  → -u links your local branch to the remote branch (only needed first time)
+  → Future pushes only need: git push
+
+git pull origin main --allow-unrelated-histories
+  → Downloads commits from GitHub that your local machine does not have
+  → --allow-unrelated-histories merges two repos that started separately
+
+--------------------------------------------------------------
+11. KEY CONCEPTS TO REMEMBER
+--------------------------------------------------------------
+
+Virtual Environment
+  → Isolated bubble for your project's libraries
+  → Must activate every time you open a new terminal
+  → source .venv/Scripts/activate (Windows)
+
+Separation of Concerns
+  → Every folder has one job
+  → Makes the project navigable for any engineer
+
+Required vs Optional Settings
+  → Field(...) = required, crashes if missing
+  → Field(default=value) = optional, uses default if missing
+
+One Source of Truth
+  → settings = Settings() creates ONE object used by the entire app
+  → logger = setup_logger() creates ONE logger used by the entire app
+  → Import the same object everywhere — never create multiple instances
+
+.env Security Rule
+  → Real keys only in .env
+  → .env is always in .gitignore
+  → .env.example has fake placeholders and IS committed
+
+--------------------------------------------------------------
+END OF DAY 1 NOTES
+Revision scheduled: Day 4
+--------------------------------------------------------------
