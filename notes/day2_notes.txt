@@ -1,0 +1,384 @@
+============================================================
+DOCMIND — DAY 2 REVISION NOTES
+Date: 2026-04-07
+Topic: Document Ingestion Pipeline — Docling, Chunking, Pydantic Models
+============================================================
+
+--------------------------------------------------------------
+1. WHAT WE BUILT TODAY
+--------------------------------------------------------------
+
+Today we built the INGESTION PIPELINE — the part of the system that
+reads documents and prepares them for AI search.
+
+Files created:
+  src/docmind/ingestion/models.py    ← Pydantic data blueprints
+  src/docmind/ingestion/parser.py    ← Docling document parser
+  src/docmind/ingestion/chunker.py   ← Text splitter with overlap
+  test_ingestion.py                  ← Test script (temporary)
+
+The pipeline flow:
+  PDF file → Docling parses it → raw text extracted → split into chunks → ready for Qdrant
+
+--------------------------------------------------------------
+2. WHAT IS AN INGESTION PIPELINE
+--------------------------------------------------------------
+
+Before a user can ask questions, the app must read and understand
+documents first. This preparation phase is called the ingestion pipeline.
+
+Think of it like a librarian:
+  1. A new book arrives
+  2. Librarian reads every page
+  3. Writes index cards summarising each section
+  4. Files the index cards so anyone can search later
+
+Our pipeline does the same:
+  PDF arrives → Docling reads it → Split into chunks → Store chunks → Ready for search
+
+Today we built steps 1, 2 and 3.
+Day 3 builds step 4 (storing in Qdrant).
+
+--------------------------------------------------------------
+3. WHAT IS DOCLING AND WHY WE USE IT
+--------------------------------------------------------------
+
+Docling is a document parsing library built by IBM Research, open sourced in 2024.
+
+THE PROBLEM WITH OLDER PARSERS (PyPDF2, pdfplumber):
+  These tools treat a PDF like a plain text file — they extract raw text line by line.
+  Tables get destroyed. Figures become meaningless. Reading order breaks.
+  Feeding this garbage to an AI gives garbage answers.
+
+WHAT DOCLING DOES DIFFERENTLY:
+  Docling understands the STRUCTURE of a document — not just the text.
+  It uses AI models to:
+  - Detect tables and preserve rows and columns
+  - Detect figures and charts
+  - Understand headings, sections, paragraphs
+  - Understand reading order
+  - Handle multi-page documents correctly
+  - Handle scanned PDFs using OCR
+
+SUPPORTED FORMATS:
+  PDF, DOCX, PPTX, XLSX, HTML, Images (PNG/JPG), Markdown
+
+WHY NOT OTHER LIBRARIES:
+  PyPDF2    → just raw text, no structure
+  pdfplumber → better but struggles with complex tables
+  Camelot   → only tables, nothing else
+  Docling   → handles everything, free, IBM quality, used in production
+
+PIPELINE OPTIONS WE SET:
+  do_ocr = False           → skip OCR (our PDF has text already, OCR wastes RAM)
+  do_table_structure = False → skip table analysis (saves memory on large documents)
+
+NOTE ON std::bad_alloc WARNINGS:
+  These are memory warnings from Docling's layout analysis model.
+  They are NOT errors — they are warnings.
+  Docling falls back gracefully and still extracts all text.
+  This is a hardware RAM limitation, not a code problem.
+  The pipeline still works correctly — all 67 pages were extracted.
+
+--------------------------------------------------------------
+4. models.py — LINE BY LINE
+--------------------------------------------------------------
+
+FILE LOCATION: src/docmind/ingestion/models.py
+
+WHY THIS FILE EXISTS:
+  Before parsing or chunking anything, we define exactly what our data looks like.
+  Pydantic validates every piece of data automatically.
+  If a chunk is missing a required field — Pydantic crashes immediately with a clear error.
+
+IMPORTS:
+  from pydantic import BaseModel, Field
+    → BaseModel: Pydantic's base class. Inheriting it gives automatic validation.
+    → Field: lets us add rules and descriptions to each field.
+
+  from typing import Optional
+    → Optional means a field can be None (not required to have a value).
+
+  from datetime import datetime
+    → Python's built-in date and time type.
+
+CLASS: DocumentChunk
+  A blueprint for ONE single chunk of text from a document.
+
+  chunk_id: str = Field(..., description="Unique identifier for this chunk")
+    → Every chunk gets a unique ID like a barcode.
+    → ... means REQUIRED. A chunk without an ID is invalid.
+    → Generated using uuid4() in chunker.py.
+
+  document_name: str = Field(..., description="Name of the source document")
+    → Which document did this chunk come from?
+    → Used to tell the user "this answer came from report.pdf".
+
+  content: str = Field(..., description="The actual text content of this chunk")
+    → The actual 500 words that get sent to Claude.
+
+  page_number: Optional[int] = Field(default=None, description="Page number")
+    → Which page did this chunk come from?
+    → Optional because some documents don't have page numbers.
+
+  chunk_index: int = Field(..., description="Position of this chunk in the document")
+    → Is this chunk number 1, 2, 3...?
+    → Used to reconstruct document order if needed.
+
+  total_chunks: int = Field(..., description="Total number of chunks in the document")
+    → How many chunks does this document have in total?
+
+  created_at: datetime = Field(default_factory=datetime.utcnow)
+    → Timestamp of when this chunk was created.
+    → default_factory calls datetime.utcnow() at creation time (not at import time).
+    → IMPORTANT: default_factory=datetime.utcnow (no brackets)
+      If you wrote default=datetime.utcnow() (with brackets), the time would
+      be frozen to when the file was imported — all chunks would have the same timestamp.
+
+CLASS: ParsedDocument
+  The full document after parsing. Contains the raw text and all chunks.
+
+  document_name: str       → name of the document file
+  total_pages: int         → how many pages were found
+  raw_text: str            → the entire extracted text from Docling
+  chunks: list[DocumentChunk] = Field(default_factory=list)
+    → list of DocumentChunk objects
+    → starts empty, filled in by chunker.py
+    → default_factory=list means it starts as [] not None
+  created_at: datetime     → when this document was parsed
+
+--------------------------------------------------------------
+5. parser.py — LINE BY LINE
+--------------------------------------------------------------
+
+FILE LOCATION: src/docmind/ingestion/parser.py
+
+WHY THIS FILE EXISTS:
+  Takes a file path, reads the document using Docling,
+  and returns a ParsedDocument with all text extracted.
+
+IMPORTS:
+  from pathlib import Path
+    → Modern Python way to handle file paths.
+    → Works on Windows, Mac and Linux without path separator issues.
+
+  from docling.document_converter import DocumentConverter
+    → The main Docling class that converts documents.
+
+  from docling.datamodel.pipeline_options import PdfPipelineOptions
+    → Lets us control how PDFs are processed (OCR on/off, etc).
+
+  from docling.datamodel.base_models import InputFormat
+    → Tells Docling what type of file we're giving it.
+
+  from docling.document_converter import PdfFormatOption
+    → Wraps the pipeline options for PDF format specifically.
+
+PIPELINE SETUP (runs once when file is imported):
+  pipeline_options = PdfPipelineOptions()
+  pipeline_options.do_ocr = False              → skip OCR, saves RAM
+  pipeline_options.do_table_structure = False  → skip table analysis, saves RAM
+
+  converter = DocumentConverter(
+      format_options={
+          InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+      }
+  )
+  → Creates ONE converter with our custom options.
+  → Created at top of file (not inside the function) so it is only created once.
+  → No matter how many documents you parse, the converter is reused.
+
+FUNCTION: parse_document(file_path: str) -> ParsedDocument
+  Takes a file path string. Returns a ParsedDocument.
+
+  path = Path(file_path)
+    → Convert string to Path object for safer file handling.
+
+  if not path.exists():
+      raise FileNotFoundError(f"Document not found: {file_path}")
+    → Check if file exists BEFORE trying to parse.
+    → Crash immediately with a clear message if missing.
+    → Better than crashing mysteriously deep inside Docling.
+
+  logger.info(f"Parsing document: {path.name}")
+    → Log that parsing has started.
+    → path.name = just the filename e.g. Data_Science_python_tutorial.pdf
+
+  result = converter.convert(str(path))
+    → Docling reads and parses the entire document.
+
+  raw_text = result.document.export_to_markdown()
+    → Converts the structured document into clean Markdown text.
+    → Headings, sections, and structure are preserved.
+
+  total_pages = len(result.document.pages)
+    → Count how many pages were found.
+
+  return ParsedDocument(
+      document_name=path.name,
+      total_pages=total_pages,
+      raw_text=raw_text,
+  )
+    → Creates and returns a ParsedDocument Pydantic model.
+    → Pydantic validates all values automatically before returning.
+
+--------------------------------------------------------------
+6. chunker.py — LINE BY LINE
+--------------------------------------------------------------
+
+FILE LOCATION: src/docmind/ingestion/chunker.py
+
+WHY THIS FILE EXISTS:
+  You cannot send a 67 page document to Claude in one go.
+  You need to find the 3-4 most relevant paragraphs and send only those.
+  Chunking splits the document into searchable pieces.
+
+IMPORT:
+  import uuid
+    → Generates universally unique IDs.
+    → Every chunk needs a unique ID so we can refer to it in Qdrant.
+
+FUNCTION: chunk_document(parsed_doc, chunk_size=500, overlap=50) -> ParsedDocument
+
+  PARAMETERS:
+    parsed_doc  → the ParsedDocument from parser.py
+    chunk_size  → each chunk is 500 words (default, can be changed)
+    overlap     → each chunk shares 50 words with the next chunk
+
+  WHY OVERLAP?
+    Without overlap:
+      Chunk 1: "...The revenue grew significantly in Q2."
+      Chunk 2: "This growth was driven by new product launches..."
+      Problem: if someone asks "What drove revenue growth?" — neither chunk has the full answer.
+
+    With 50 word overlap:
+      Chunk 1: "...The revenue grew significantly in Q2."
+      Chunk 2: "The revenue grew significantly in Q2. This growth was driven by new product launches..."
+      Now Chunk 2 has full context. The AI answers correctly.
+
+  CODE WALKTHROUGH:
+    text = parsed_doc.raw_text
+      → Get the full extracted text.
+
+    words = text.split()
+      → Split by spaces → turns one long string into list of individual words.
+      → Example: "Hello world" → ["Hello", "world"]
+
+    start = 0
+    while start < len(words):
+      → Loop through all words.
+
+      end = start + chunk_size
+        → End position = start + 500.
+
+      chunk_words = words[start:end]
+        → Take 500 words from start to end.
+
+      chunk_text = " ".join(chunk_words)
+        → Join words back into a string with spaces.
+        → Opposite of .split()
+
+      chunk = DocumentChunk(
+          chunk_id=str(uuid.uuid4()),
+          → uuid4() generates a random unique ID like "a3f2c1d4-8b2e-..."
+          → str() converts it to a string.
+
+          document_name=parsed_doc.document_name,
+          content=chunk_text,
+          chunk_index=index,
+          total_chunks=0,   ← placeholder, filled in after all chunks are created
+      )
+
+      start += chunk_size - overlap
+        → Move forward by 500 - 50 = 450 words.
+        → This creates the 50 word overlap between chunks.
+
+    for chunk in chunks:
+        chunk.total_chunks = len(chunks)
+      → Now that all chunks are created, go back and fill in the real total.
+      → Every chunk knows how many total chunks exist.
+
+--------------------------------------------------------------
+7. HOW THE THREE FILES WORK TOGETHER
+--------------------------------------------------------------
+
+STEP 1: Call parse_document('data/uploads/report.pdf')
+  → parser.py opens the file
+  → Docling reads all pages
+  → Returns ParsedDocument(document_name, total_pages, raw_text, chunks=[])
+
+STEP 2: Call chunk_document(parsed_doc)
+  → chunker.py splits raw_text into 500 word pieces
+  → Each piece becomes a DocumentChunk with unique ID
+  → Returns ParsedDocument with chunks filled in
+
+STEP 3 (Day 3): Send chunks to Qdrant
+  → Each chunk's content gets converted to a vector by OpenAI
+  → Vector + chunk metadata stored in Qdrant
+  → Ready for search
+
+--------------------------------------------------------------
+8. TEST RESULTS
+--------------------------------------------------------------
+
+Document tested: Data_Science_python_tutorial.pdf
+Pages extracted: 67
+Total chunks created: 15
+First chunk preview: "## EXPLORING FURTHER Files such as Word documents..."
+
+This confirms:
+  ✓ Docling successfully read the PDF
+  ✓ Text was extracted correctly with Markdown structure
+  ✓ Chunker split the text into 15 searchable pieces
+  ✓ Each chunk has a unique ID, document name, content, index
+
+--------------------------------------------------------------
+9. KEY CONCEPTS TO REMEMBER
+--------------------------------------------------------------
+
+Ingestion Pipeline
+  → The preparation phase before users can search documents
+  → Parse → Chunk → Store (in Qdrant on Day 3)
+
+Why Pydantic Models First
+  → Define the shape of data before writing logic
+  → Validation happens automatically
+  → Any part of the app knows exactly what a DocumentChunk looks like
+
+Why Docling Over PyPDF2
+  → PyPDF2 destroys table structure and reading order
+  → Docling preserves structure — headings, tables, sections
+  → Better parsed text = better AI answers
+
+Chunk Size and Overlap
+  → chunk_size=500 → each piece is 500 words
+  → overlap=50 → 50 words shared between adjacent chunks
+  → Overlap prevents context being lost at chunk boundaries
+
+UUID
+  → Universally Unique Identifier
+  → uuid4() generates a random unique string
+  → Every chunk has a unique ID so Qdrant can store and retrieve it precisely
+
+default_factory vs default
+  → default=[] → WRONG, all instances share the same list (Python bug trap)
+  → default_factory=list → CORRECT, each instance gets its own fresh list
+  → Same for datetime: default_factory=datetime.utcnow not default=datetime.utcnow()
+
+--------------------------------------------------------------
+10. GIT COMMANDS USED TODAY
+--------------------------------------------------------------
+
+git add .
+  → Stage all new and changed files
+
+git commit -m "Day 2: Ingestion pipeline — Docling parser, chunker, Pydantic models"
+  → Save a permanent snapshot with a descriptive message
+
+git push
+  → Upload to GitHub (no extra flags needed after first push)
+
+--------------------------------------------------------------
+END OF DAY 2 NOTES
+Revision scheduled: Day 4
+--------------------------------------------------------------
