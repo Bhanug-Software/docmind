@@ -17,22 +17,6 @@ A production-grade multi-agent RAG (Retrieval-Augmented Generation) system for i
 | Observability | LangSmith |
 | Containerization | Docker |
 
-## Project Structure
-
-```
-docmind/
-├── src/
-│   └── docmind/
-│       ├── api/          # FastAPI routes
-│       ├── agents/       # LangGraph multi-agent logic
-│       ├── ingestion/    # Docling document parsing
-│       ├── retrieval/    # Qdrant vector search
-│       ├── config/       # Settings & environment
-│       └── utils/        # Shared helpers (logging, etc.)
-├── tests/                # pytest tests
-├── data/                 # Document storage
-└── docker-compose.yml    # Local infrastructure
-```
 
 ## Getting Started
 
