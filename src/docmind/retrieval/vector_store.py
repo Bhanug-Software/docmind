@@ -55,7 +55,7 @@ def store_chunks(chunks: list[DocumentChunk]):
     logger.info(f"Stored {len(points)} chunks in Qdrant")
 
 
-def search_chunks(query: str, top_k: int = 5) -> list[dict]:
+def search_chunks(query: str, top_k: int = 5, score_threshold: float = 0.15) -> list[dict]:
     query_embedding = get_embedding(query)
 
     results = client.query_points(
@@ -66,13 +66,14 @@ def search_chunks(query: str, top_k: int = 5) -> list[dict]:
 
     chunks = []
     for result in results:
-        chunks.append({
-            "content": result.payload["content"],
-            "document_name": result.payload["document_name"],
-            "chunk_index": result.payload["chunk_index"],
-            "score": result.score,
-        })
+        if result.score >= score_threshold:
+            chunks.append({
+                "content": result.payload["content"],
+                "document_name": result.payload["document_name"],
+                "chunk_index": result.payload["chunk_index"],
+                "score": result.score,
+            })
 
-    logger.info(f"Found {len(chunks)} relevant chunks for query: '{query[:50]}'")
+    logger.info(f"Found {len(chunks)} relevant chunks (score >= {score_threshold}) for query: '{query[:50]}'")
 
     return chunks

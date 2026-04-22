@@ -11,6 +11,7 @@ class RAGState(TypedDict):
     question: str
     chunks: list[dict]
     answer: str
+    has_context: bool   # NEW — did we find relevant chunks?
 
 
 # Step 2 — Define the Nodes
@@ -20,6 +21,16 @@ def retrieve_node(state: RAGState) -> dict:
     chunks = search_chunks(state["question"], top_k=3)
     logger.info(f"Retrieved {len(chunks)} chunks")
     return {"chunks": chunks}
+
+
+# NEW — checks if retrieved chunks are good enough to send to Claude
+def check_node(state: RAGState) -> dict:
+    if state["chunks"]:
+        logger.info(f"Context check PASSED — {len(state['chunks'])} chunks found")
+        return {"has_context": True}
+    else:
+        logger.warning("Context check FAILED — no relevant chunks found")
+        return {"has_context": False}
 
 
 def generate_node(state: RAGState) -> dict:
@@ -57,16 +68,45 @@ Answer:"""
     return {"answer": answer}
 
 
+# NEW — returns an honest message when no relevant chunks were found
+def fallback_node(state: RAGState) -> dict:
+    logger.info("Running fallback — no relevant context found")
+    return {"answer": "I could not find any relevant information in the uploaded documents for this question."}
+
+
+# NEW — routing function: tells LangGraph where to go after check_node
+def route_after_check(state: RAGState) -> str:
+    if state["has_context"]:
+        return "generate"
+    return "fallback"
+
+
 # Step 3 — Build the Graph
 def build_rag_graph():
     graph = StateGraph(RAGState)
 
+    # Register all nodes
     graph.add_node("retrieve", retrieve_node)
+    graph.add_node("check", check_node)          # NEW
     graph.add_node("generate", generate_node)
+    graph.add_node("fallback", fallback_node)    # NEW
 
+    # Fixed edges
     graph.add_edge(START, "retrieve")
-    graph.add_edge("retrieve", "generate")
+    graph.add_edge("retrieve", "check")          # retrieve always goes to check
+
+    # Conditional edge — check decides: generate or fallback
+    graph.add_conditional_edges(
+        "check",            # from this node
+        route_after_check,  # call this function to decide
+        {
+            "generate": "generate",   # if function returns "generate" → go to generate
+            "fallback": "fallback",   # if function returns "fallback" → go to fallback
+        }
+    )
+
     graph.add_edge("generate", END)
+    graph.add_edge("fallback", END)              # NEW
 
     return graph.compile()
 
