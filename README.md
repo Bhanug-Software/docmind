@@ -81,13 +81,30 @@ User asks a question
         ↓
 retrieve_node  → searches Qdrant for relevant chunks
         ↓
-check_node     → are chunks relevant enough? (score threshold)
+check_node     → are chunks relevant enough? (score >= 0.25)
         ↓
-      YES                    NO
-       ↓                      ↓
-generate_node            fallback_node
-Claude answers            "Not found"
+      YES                         NO + retries left
+       ↓                               ↓
+generate_node              rephrase_node → retrieve again
+Claude answers             Claude rephrases query (max 2 retries)
+                                          ↓
+                               NO + no retries left
+                                          ↓
+                                   fallback_node
+                                   "Not found"
 ```
+
+## Agent Architecture
+
+DocMind uses a **Loop/ReAct agent** — Reason + Act pattern:
+
+1. **retrieve_node** — searches Qdrant using current query
+2. **check_node** — evaluates chunk quality by score threshold
+3. **rephrase_node** — asks Claude to rewrite the query into better search terms
+4. **generate_node** — sends relevant chunks + question to Claude for final answer
+5. **fallback_node** — returns honest "not found" after max retries
+
+The agent retries up to 2 times with rephrased queries before falling back — no hallucination, no silent failures.
 
 ## Build Progress
 
@@ -98,9 +115,10 @@ Claude answers            "Not found"
 | Day 3 | Vector embeddings — OpenAI embeddings, Qdrant storage and search | Done |
 | Day 5 | Sequential agent — LangGraph, retrieve node, generate node | Done |
 | Day 6 | Conditional agent — check node, fallback node, score threshold | Done |
-| Next | Loop agent — retry logic when results are poor | In progress |
-| Later | FastAPI backend, Memory, Chainlit UI, Docker Compose | Planned |
+| Day 7 | Loop/ReAct agent — rephrase node, retry logic, max retries | Done |
+| Next | Chainlit UI — chat interface for document Q&A | Planned |
+| Later | FastAPI backend, Docker Compose, LangSmith, Deployment | Planned |
 
 ## Status
 
-Active development — core RAG pipeline complete, agent layer in progress.
+Active development — full ReAct agent complete, UI layer next.
