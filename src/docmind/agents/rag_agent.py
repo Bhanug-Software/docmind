@@ -5,32 +5,65 @@ from src.docmind.utils.logger import logger
 import anthropic
 from src.docmind.config.settings import settings
 
+MAX_RETRIES = 2
+SCORE_THRESHOLD = 0.25
+
 
 # Step 1 — Define the State (the shared whiteboard)
 class RAGState(TypedDict):
     question: str
+    search_query: str
     chunks: list[dict]
     answer: str
-    has_context: bool   # NEW — did we find relevant chunks?
+    has_context: bool
+    retry_count: int
 
 
 # Step 2 — Define the Nodes
 
 def retrieve_node(state: RAGState) -> dict:
-    logger.info(f"Retrieving chunks for question: {state['question'][:50]}")
-    chunks = search_chunks(state["question"], top_k=3)
+    query = state.get("search_query") or state["question"]
+    logger.info(f"Retrieving chunks for query: {query[:60]}")
+    chunks = search_chunks(query, top_k=3)
     logger.info(f"Retrieved {len(chunks)} chunks")
     return {"chunks": chunks}
 
 
-# NEW — checks if retrieved chunks are good enough to send to Claude
 def check_node(state: RAGState) -> dict:
-    if state["chunks"]:
-        logger.info(f"Context check PASSED — {len(state['chunks'])} chunks found")
-        return {"has_context": True}
+    chunks = state["chunks"]
+    good_chunks = [c for c in chunks if c["score"] >= SCORE_THRESHOLD]
+
+    if good_chunks:
+        logger.info(f"Context check PASSED — {len(good_chunks)} good chunks (score >= {SCORE_THRESHOLD})")
+        return {"has_context": True, "chunks": good_chunks}
     else:
-        logger.warning("Context check FAILED — no relevant chunks found")
+        logger.warning(f"Context check FAILED — no chunks above score threshold {SCORE_THRESHOLD}")
         return {"has_context": False}
+
+
+def rephrase_node(state: RAGState) -> dict:
+    retry_count = state.get("retry_count", 0) + 1
+    logger.info(f"Rephrasing query — attempt {retry_count} of {MAX_RETRIES}")
+
+    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+
+    message = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=100,
+        messages=[
+            {
+                "role": "user",
+                "content": f"""You are a search query optimizer.
+The user asked: "{state['question']}"
+The search returned poor results. Rephrase this into better search keywords.
+Return ONLY the rephrased keywords. Nothing else. No explanation."""
+            }
+        ]
+    )
+
+    new_query = message.content[0].text.strip()
+    logger.info(f"Rephrased query: {new_query}")
+    return {"search_query": new_query, "retry_count": retry_count}
 
 
 def generate_node(state: RAGState) -> dict:
@@ -68,45 +101,47 @@ Answer:"""
     return {"answer": answer}
 
 
-# NEW — returns an honest message when no relevant chunks were found
 def fallback_node(state: RAGState) -> dict:
-    logger.info("Running fallback — no relevant context found")
+    logger.info("Running fallback — no relevant context found after all retries")
     return {"answer": "I could not find any relevant information in the uploaded documents for this question."}
 
 
-# NEW — routing function: tells LangGraph where to go after check_node
+# Step 3 — Routing function
 def route_after_check(state: RAGState) -> str:
     if state["has_context"]:
         return "generate"
-    return "fallback"
+    elif state.get("retry_count", 0) < MAX_RETRIES:
+        return "rephrase"
+    else:
+        return "fallback"
 
 
-# Step 3 — Build the Graph
+# Step 4 — Build the Graph
 def build_rag_graph():
     graph = StateGraph(RAGState)
 
-    # Register all nodes
     graph.add_node("retrieve", retrieve_node)
-    graph.add_node("check", check_node)          # NEW
+    graph.add_node("check", check_node)
+    graph.add_node("rephrase", rephrase_node)
     graph.add_node("generate", generate_node)
-    graph.add_node("fallback", fallback_node)    # NEW
+    graph.add_node("fallback", fallback_node)
 
-    # Fixed edges
     graph.add_edge(START, "retrieve")
-    graph.add_edge("retrieve", "check")          # retrieve always goes to check
+    graph.add_edge("retrieve", "check")
+    graph.add_edge("rephrase", "retrieve")
 
-    # Conditional edge — check decides: generate or fallback
     graph.add_conditional_edges(
-        "check",            # from this node
-        route_after_check,  # call this function to decide
+        "check",
+        route_after_check,
         {
-            "generate": "generate",   # if function returns "generate" → go to generate
-            "fallback": "fallback",   # if function returns "fallback" → go to fallback
+            "generate": "generate",
+            "rephrase": "rephrase",
+            "fallback": "fallback",
         }
     )
 
     graph.add_edge("generate", END)
-    graph.add_edge("fallback", END)              # NEW
+    graph.add_edge("fallback", END)
 
     return graph.compile()
 

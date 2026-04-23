@@ -1,0 +1,9 @@
+TEST 1 - resume question
+has_context: False
+chunks found: 0
+Answer: I could not find any relevant information in the uploaded documents for this question.
+
+TEST 2 - unrelated question
+has_context: False
+chunks found: 0
+Answer: I could not find any relevant information in the uploaded documents for this question.
