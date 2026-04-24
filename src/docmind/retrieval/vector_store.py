@@ -27,6 +27,23 @@ def create_collection():
         logger.info(f"Collection already exists: {COLLECTION_NAME}")
 
 
+def clear_collection():
+    existing = [c.name for c in client.get_collections().collections]
+
+    if COLLECTION_NAME in existing:
+        client.delete_collection(COLLECTION_NAME)
+        logger.info(f"Cleared Qdrant collection: {COLLECTION_NAME}")
+
+    client.create_collection(
+        collection_name=COLLECTION_NAME,
+        vectors_config=VectorParams(
+            size=EMBEDDING_DIMENSIONS,
+            distance=Distance.COSINE,
+        ),
+    )
+    logger.info(f"Recreated Qdrant collection: {COLLECTION_NAME}")
+
+
 def store_chunks(chunks: list[DocumentChunk]):
     create_collection()
 
