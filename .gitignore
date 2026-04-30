@@ -36,3 +36,8 @@ build/
 
 # notes
 notes/
+
+# Chainlit auto-generated files
+.chainlit/
+.files/
+chainlit.md
