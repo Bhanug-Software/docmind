@@ -1,14 +1,9 @@
-import shutil
-import os
+import httpx
 import chainlit as cl
-from src.docmind.ingestion.parser import parse_document
-from src.docmind.ingestion.chunker import chunk_document
-from src.docmind.retrieval.vector_store import store_chunks, clear_collection
-from src.docmind.agents.rag_agent import rag_app
 from src.docmind.utils.logger import logger
 
 
-UPLOAD_DIR = "data/uploads"
+FASTAPI_URL = "http://localhost:8080"
 
 
 @cl.on_chat_start
@@ -25,21 +20,22 @@ async def start():
 
     file = files[0]
 
-    processing_msg = await cl.Message(content=f"Processing **{file.name}**...").send()
+    await cl.Message(content=f"Processing **{file.name}**...").send()
 
-    save_path = os.path.join(UPLOAD_DIR, file.name)
-    shutil.copy(file.path, save_path)
-    logger.info(f"Saved uploaded file to {save_path}")
+    async with httpx.AsyncClient(timeout=300) as client:
+        with open(file.path, "rb") as f:
+            response = await client.post(
+                f"{FASTAPI_URL}/ingest",
+                files={"file": (file.name, f, "application/pdf")},
+            )
 
-    clear_collection()
-    parsed = parse_document(save_path)
-    chunked = chunk_document(parsed)
-    store_chunks(chunked.chunks)
+    result = response.json()
+    logger.info(f"Ingest response: {result}")
 
-    cl.user_session.set("document_name", file.name)
+    cl.user_session.set("document_name", result["document_name"])
 
     await cl.Message(
-        content=f"**{file.name}** is ready. {len(chunked.chunks)} chunks indexed.\n\nAsk me anything about the document."
+        content=f"**{result['document_name']}** is ready. {result['chunks']} chunks indexed.\n\nAsk me anything about the document."
     ).send()
 
 
@@ -51,23 +47,21 @@ async def main(message: cl.Message):
         await cl.Message(content="Please upload a document first by refreshing the page.").send()
         return
 
-    thinking_msg = await cl.Message(content="Searching the document...").send()
+    await cl.Message(content="Searching the document...").send()
 
-    result = rag_app.invoke({
-        "question": message.content,
-        "search_query": "",
-        "chunks": [],
-        "answer": "",
-        "has_context": False,
-        "retry_count": 0,
-    })
+    async with httpx.AsyncClient(timeout=120) as client:
+        response = await client.post(
+            f"{FASTAPI_URL}/ask",
+            json={"question": message.content},
+        )
 
+    result = response.json()
     answer = result["answer"]
-    chunks = result.get("chunks", [])
-    retry_count = result.get("retry_count", 0)
+    chunks_used = result["chunks_used"]
+    retries = result["retries"]
 
-    if chunks:
-        source_line = f"\n\n---\n*{len(chunks)} chunks retrieved from **{document_name}** | Retries: {retry_count}*"
+    if chunks_used > 0:
+        source_line = f"\n\n---\n*{chunks_used} chunks retrieved from **{document_name}** | Retries: {retries}*"
     else:
         source_line = f"\n\n---\n*No relevant chunks found in **{document_name}***"
 
