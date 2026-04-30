@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.94.0",
+    "chainlit>=2.11.1",
     "docling>=2.85.0",
+    "httpx>=0.28.1",
     "langgraph>=1.1.6",
     "loguru>=0.7.3",
     "openai>=2.30.0",
