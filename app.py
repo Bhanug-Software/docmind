@@ -1,9 +1,10 @@
+import os
 import httpx
 import chainlit as cl
 from src.docmind.utils.logger import logger
 
 
-FASTAPI_URL = "http://localhost:8080"
+FASTAPI_URL = os.getenv("FASTAPI_URL", "http://localhost:8080")
 
 
 @cl.on_chat_start
