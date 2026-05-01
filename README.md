@@ -17,7 +17,7 @@ Upload any PDF document and ask questions about it. DocMind retrieves the most r
 | API | FastAPI |
 | Package Manager | uv |
 | Observability | LangSmith (coming soon) |
-| Containerization | Docker (coming soon) |
+| Containerization | Docker Compose |
 
 
 ## Getting Started
@@ -42,14 +42,8 @@ uv sync
 cp .env.example .env
 # Fill in your API keys in .env
 
-# Start Qdrant (requires Docker)
-docker run -d --name qdrant -p 6333:6333 qdrant/qdrant
-
-# Start FastAPI backend
-uvicorn api:app --port 8080 --reload
-
-# Start Chainlit UI (in a new terminal)
-chainlit run app.py --port 8001
+# Start everything with one command
+docker compose up --build
 ```
 
 Open `http://localhost:8001` in your browser, upload a PDF, and start asking questions.
@@ -147,10 +141,10 @@ Test all endpoints directly in the browser — no extra tools needed.
 | Loop/ReAct agent — rephrase node, retry logic, max retries | Done |
 | Chainlit UI — chat interface, file upload, connected to FastAPI | Done |
 | FastAPI backend — health, ingest, ask endpoints | Done |
-| Docker Compose — single command startup | Coming soon |
+| Docker Compose — single command startup | Done |
 | LangSmith — agent observability and tracing | Coming soon |
 | Deployment — public URL | Coming soon |
 
 ## Status
 
-Active development — FastAPI backend and Chainlit UI complete. Docker and deployment next.
+Active development — FastAPI backend, Chainlit UI, and Docker Compose complete. LangSmith observability and deployment next.
